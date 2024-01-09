@@ -5,7 +5,7 @@ A simple webapp to explore a tree of information.
 Originally used to run simple tracking of a teams work.
 
 Features:
-* Running online free at https://tree-explorer.github.io/
+* Running online free at [https://tree-explorer.github.io/](https://jezternz.github.io/tree-explorer/)
 * Wildly simple, all leafs can contain other leafs and text and thats it!
 * All changes are saved to local storage, so you can just come back to the site and continue where you left off (in the same browser).
 * Ability to zoom/pan
