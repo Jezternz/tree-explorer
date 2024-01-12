@@ -1,5 +1,7 @@
 // Tree Explorer //
 
+const isDebug = document.location.search.slice(1).toLowerCase().split('&').includes('debug=1'); // Append ?debug=1 to get additional visual debugging
+
 const randomColors = [
     '#911eb4'
     , '#4363d8'
@@ -31,7 +33,7 @@ const zoomMultiplier = 0.25;
 const fontFamily = 'Tahoma';
 const innerRingSizeModifier = 0.4;
 const localStorageKeyPrefix = 'te_tree_';
-const localStorageLastSelectedKey = 'te_lastselected';
+const localStorageSelectedTreeKey = 'te_lastselected';
 const validSizeModifier = 200;
 const validSizes = { '1': 0.5, '2': 0.75, '3': 1 };
 
@@ -42,12 +44,16 @@ let panX = null;
 let panY = null;
 let centerX = window.innerWidth / 2;
 let centerY = window.innerHeight / 2;
+let lastMouseX = null;
+let lastMouseY = null;
+let hoverTextTargetKey = null;
 
 let draggingTarget = null;
 let currentlyHoveringOn = [];
 let currentlyPanning = false;
 let lastDragInformation = { dragActive: false };
 let itemSizePositionCache = {};
+let itemTextPositionCache = {};
 let itemOrderCache = [];
 let textModificationDialogParent = null;
 let textModificationDialogTextArea = null;
@@ -189,81 +195,25 @@ const withSizeAndPosition = (item) => {
 
 const calculateButtonDimensions = (item) => {
     const v = {};
-
-    v.x = item.x;
-    v.sizePx = Math.max(2, item.sizePx / 3) * (2 / 5);
-
-    if(item.children.length <= 2) {
-        // plus goes underneath
-        v.y = item.y - (item.sizePx * 0.75);
-    } else {
-        // plus goes in center
-        v.y = item.y;
-    }
-
-    v.lineWidth = Math.max(2, v.sizePx / 15);
-    v.color = '#e0e0e0';
-
-    const fullButtonSizePx = (v.sizePx * 1.4);
-    const halfButtonSizePx = fullButtonSizePx / 2;
-    const buttonSpacing = (v.sizePx * 0.7)
-    const halfButtonSpacing = buttonSpacing / 2;
+    const fullButtonSizePx = Math.min((Math.max(2, item.sizePx / 3) * (2 / 5) * 1.4), 20);
 
     v.buttons = [];
 
     if(item.parentId) {
         v.buttons.push({
             type: 'remove',
-            x: v.x - (fullButtonSizePx + buttonSpacing),
-            y: v.y,
-            xStart: v.x - (halfButtonSizePx + buttonSpacing + fullButtonSizePx),
-            yStart: v.y - halfButtonSizePx,
-            xEnd: v.x - (halfButtonSizePx + buttonSpacing),
-            yEnd: v.y + halfButtonSizePx
-        });
-
-        v.buttons.push({
-            type: 'modifyText',
-            x: v.x,
-            y: v.y,
-            xStart: v.x - halfButtonSizePx,
-            yStart: v.y - halfButtonSizePx,
-            xEnd: v.x + halfButtonSizePx,
-            yEnd: v.y + halfButtonSizePx
-        });
-
-        v.buttons.push({
-            type: 'add',
-            x: v.x + (fullButtonSizePx + buttonSpacing),
-            y: v.y,
-            xStart: v.x + (halfButtonSizePx + buttonSpacing),
-            yStart: v.y - halfButtonSizePx,
-            xEnd: v.x + (halfButtonSizePx + buttonSpacing + fullButtonSizePx),
-            yEnd: v.y + halfButtonSizePx
-        });
-    } else {
-
-        v.buttons.push({
-            type: 'modifyText',
-            x: v.x - halfButtonSizePx - halfButtonSpacing,
-            y: v.y,
-            xStart: v.x - fullButtonSizePx - halfButtonSpacing,
-            yStart: v.y - halfButtonSizePx,
-            xEnd: v.x - halfButtonSpacing,
-            yEnd: v.y + halfButtonSizePx
-        });
-
-        v.buttons.push({
-            type: 'add',
-            x: v.x + halfButtonSizePx + halfButtonSpacing,
-            y: v.y,
-            xStart: v.x + halfButtonSpacing,
-            yStart: v.y - halfButtonSizePx,
-            xEnd: v.x + fullButtonSizePx + halfButtonSpacing,
-            yEnd: v.y + halfButtonSizePx
+            x: item.x+(Math.cos(Math.PI*1.25) * item.sizePx),
+            y: item.y+(Math.sin(Math.PI*1.25) * item.sizePx),
+            sizePx: fullButtonSizePx
         });
     }
-
+    
+    v.buttons.push({
+        type: 'add',
+        x: item.x+(Math.cos(Math.PI*1.75) * item.sizePx),
+        y: item.y+(Math.sin(Math.PI*1.75) * item.sizePx),
+        sizePx: fullButtonSizePx
+    });
 
     return v;
 }
@@ -278,7 +228,7 @@ const resizeCanvas = () => {
 };
 
 const reDraw = (resetCache = false) => {
-    if(resetCache) {
+        if(resetCache) {
         itemSizePositionCache = {};
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
@@ -292,7 +242,27 @@ const reDraw = (resetCache = false) => {
         return ({ ...withSizeAndPosition(it), text: it.text, color });
     });
 
-    opts.forEach(drawNode);
+    opts.forEach(drawNode);  
+
+    if(hoverTextTargetKey)
+    {
+        drawTextHoverBorder();
+    }
+    else
+    {
+        opts.forEach(drawNodeButtons); 
+    }
+}
+
+const drawTextHoverBorder = () =>
+{
+    const { hoverBoxStartX, hoverBoxStartY, hoverBoxWidth, hoverBoxHeight} = itemTextPositionCache[hoverTextTargetKey];
+    context.globalAlpha = 0.5;
+    context.rect(hoverBoxStartX, hoverBoxStartY, hoverBoxWidth, hoverBoxHeight);
+    context.strokeStyle = '#ddd';
+    context.lineWidth = 1;
+    context.stroke();        
+    context.globalAlpha = 1;
 }
 
 const drawNode = (opts) => {
@@ -312,40 +282,35 @@ const drawNode = (opts) => {
         opacity: circleOpacity
     });
     drawNodeText(opts);
+    //drawCircle({ ...opts, color: '#f4f4f4', sizePx: opts.innerRingSizePx, dashPattern: [20,10] })
+}
+
+const drawNodeButtons = (opts) => {
     if(!opts.restrictInteractivity && currentlyHoveringOn[0] === opts.id) {
         for(const b of opts.buttonDimensions.buttons) {
             if(b.type === 'remove') {
-                drawRemove({
-                    ...opts.buttonDimensions,
-                    ...b
-                });
-            } else if(b.type === 'modifyText') {
-                drawModifyText({
-                    ...opts.buttonDimensions,
-                    ...b
-                });
+                drawRemove(b);
             } else if(b.type === 'add') {
-                drawPlus({
-                    ...opts.buttonDimensions,
-                    ...b
-                });
+                drawPlus(b);
             }
         }
     }
-    //drawCircle({ ...opts, color: '#f4f4f4', sizePx: opts.innerRingSizePx, dashPattern: [20,10] })
 }
 
 const drawPlus = ({
     x,
     y,
-    xStart,
-    sizePx,
-    xEnd,
-    yStart,
-    yEnd,
-    color,
-    lineWidth = 1
+    sizePx
 }) => {
+
+    const lineWidth = Math.max(2, sizePx / 15);
+    const color = '#ddd';
+    const bufferSpace = sizePx * 0.1;
+    const xStart = x - (sizePx/2);
+    const yStart = y - (sizePx/2);
+    const xEnd = x + (sizePx/2);
+    const yEnd = y + (sizePx/2);
+
     drawCircle({
         x,
         y,
@@ -354,6 +319,10 @@ const drawPlus = ({
         fillColor: '#fff',
         borderWidth: lineWidth / 2
     })
+
+    context.strokeStyle = color;
+    context.lineWidth = lineWidth;
+
     context.strokeStyle = color;
     context.lineWidth = lineWidth;
     context.beginPath();
@@ -366,45 +335,20 @@ const drawPlus = ({
     context.stroke();
 }
 
-const drawModifyText = ({
-    x,
-    y,
-    sizePx,
-    color,
-    lineWidth = 1
-}) => {
-    drawCircle({
-        x,
-        y,
-        sizePx,
-        color,
-        fillColor: '#fff',
-        borderWidth: lineWidth / 2
-    });
-
-    context.beginPath();
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillStyle = color;
-    context.font = `${sizePx * 1.4}px ${fontFamily}`;
-    // context.lineWidth = 5;
-    // context.strokeStyle = '#eee';
-    // context.strokeText("Tt", x, y);
-    context.fillText("Tt", x, y + (sizePx * 0.1));
-
-}
-
 const drawRemove = ({
     x,
     y,
-    xStart,
-    sizePx,
-    xEnd,
-    yStart,
-    yEnd,
-    color,
-    lineWidth = 1
+    sizePx
 }) => {
+
+    const lineWidth = Math.max(2, sizePx / 15);
+    const color = '#ddd';
+    const bufferSpace = sizePx * 0.1;
+    const xStart = x - (sizePx/2);
+    const yStart = y - (sizePx/2);
+    const xEnd = x + (sizePx/2);
+    const yEnd = y + (sizePx/2);
+
     drawCircle({
         x,
         y,
@@ -413,9 +357,10 @@ const drawRemove = ({
         fillColor: '#fff',
         borderWidth: lineWidth / 2
     })
+
     context.strokeStyle = color;
     context.lineWidth = lineWidth;
-    const bufferSpace = sizePx * 0.1;
+
     context.beginPath();
     context.moveTo(xStart + bufferSpace, yStart + bufferSpace);
     context.lineTo(xEnd - bufferSpace, yEnd - bufferSpace);
@@ -453,6 +398,7 @@ const drawCircle = ({
 }
 
 const drawNodeText = ({
+    id,
     text,
     x,
     y,
@@ -462,9 +408,8 @@ const drawNodeText = ({
 }) => {
     if(restrictVisibility) {
         if(sizePx < 3) {
+            delete itemTextPositionCache[id];
             return;
-        } else {
-            //text = '...';
         }
     }
     context.beginPath();
@@ -484,7 +429,7 @@ const drawNodeText = ({
 
     const textOpts = {
         font: fontFamily,
-        debug: false
+        debug: isDebug
     };
 
     context.font = `1px ${textOpts.font}`; // Required for future measureText() calls.
@@ -493,8 +438,9 @@ const drawNodeText = ({
         if(text.length <= 40) {
             // stroked text is preferable for titles, but not mandatory if there is significant text.
             isStrokeText = true;
+            maxSizePx = sizePx * 0.98;
             textOpts.x = x;
-            textOpts.y = Math.floor(y - (sizePx * 0.98));
+            textOpts.y = Math.floor(y - maxSizePx);
         } else {
             maxSizePx = sizePx * 0.25;
             textOpts.x = x - (sizePx * 1.25);
@@ -502,14 +448,14 @@ const drawNodeText = ({
             textOpts.width = sizePx * 2.5;
             textOpts.height = maxSizePx;
         }
-        textOpts.fontSize = Math.max(10, Math.floor(sizePx / context.measureText(text).width / 2)).toFixed(0);
+        textOpts.fontSize = +Math.max(10, Math.floor(sizePx / context.measureText(text).width / 2)).toFixed(0);
     } else {
         maxSizePx = sizePx * 1.5;
         textOpts.x = x - sizePx;
         textOpts.y = y - sizePx;
         textOpts.width = sizePx * 2;
         textOpts.height = sizePx * 2;
-        textOpts.fontSize = Math.max(10, Math.floor(sizePx / context.measureText(text).width)).toFixed(0);
+        textOpts.fontSize = +Math.max(10, Math.floor(sizePx / context.measureText(text).width)).toFixed(0);
     }
 
     if(isStrokeText) {
@@ -517,30 +463,72 @@ const drawNodeText = ({
         context.lineWidth = 3;
         context.strokeStyle = '#fff';
         context.strokeText(text, textOpts.x, textOpts.y);
+        const expectedTextWidth = context.measureText(text).width;
         context.fillText(text, textOpts.x, textOpts.y);
+
+        itemTextPositionCache[id] = {
+            hoverBoxStartX: textOpts.x-(expectedTextWidth/2)
+            , hoverBoxStartY: textOpts.y-textOpts.fontSize-(sizePx*0.01)
+            , hoverBoxWidth: expectedTextWidth
+            , hoverBoxHeight: textOpts.fontSize
+        };
+
     } else {
         if(text.length > 20) {
             // Perform an extra invisible run first if there is more text, as text length likely needs to be culled
 
             const existingAlpha = context.globalAlpha;
             context.globalAlpha = 0;
-
             const {
                 height: heightOut
             } = window.canvasTxt.drawText(context, text, textOpts);
-
             context.globalAlpha = existingAlpha;
-
             const heightRatio = maxSizePx / heightOut;
-
             if(heightRatio < 1) {
                 text = text.slice(0, Math.floor(text.length * heightRatio)) + "..."
             }
         }
 
-        window.canvasTxt.drawText(context, text, textOpts);
-    }
+        const rows = window.canvasTxt.splitText({ ctx: context, text, justify:false, width:textOpts.width }).length;  
+        window.canvasTxt.drawText(context, text, textOpts);      
+        const expectedTotalHeight = rows * textOpts.fontSize;
 
+        itemTextPositionCache[id] = {
+            hoverBoxStartX: textOpts.x
+            , hoverBoxStartY: textOpts.y+(textOpts.height/2)-(expectedTotalHeight/2)
+            , hoverBoxWidth: textOpts.width
+            , hoverBoxHeight: expectedTotalHeight
+        };
+
+    }
+}
+
+const textHoverHasChanged = () =>
+{
+    let pendingHoverTarget = null;
+    for(let k in itemTextPositionCache)
+    {
+        const { hoverBoxStartX, hoverBoxStartY, hoverBoxWidth, hoverBoxHeight} = itemTextPositionCache[k];
+        if(
+            lastMouseX > hoverBoxStartX 
+            && lastMouseX < hoverBoxStartX+hoverBoxWidth
+            && lastMouseY > hoverBoxStartY 
+            && lastMouseY < hoverBoxStartY+hoverBoxHeight
+        )
+        {
+            if(pendingHoverTarget !== k)
+            {
+                pendingHoverTarget = k;
+                break;
+            }
+        }
+    }
+    if(hoverTextTargetKey !== pendingHoverTarget)
+    {
+        hoverTextTargetKey = pendingHoverTarget;
+        return true;
+    }
+    return false;
 }
 
 const randomString = () => Math.random().toString().slice(2, 8);
@@ -557,8 +545,6 @@ const onButtonPressed = (it, type) => {
         });
         reDraw(true);
         resetItemOrderCache();
-    } else if(type === 'modifyText') {
-        openModificationDialog(it.id);
     } else if(type === 'add') {
         addToHistoryAndApply({
             action: 'add',
@@ -576,8 +562,8 @@ const onButtonPressed = (it, type) => {
 
 const openModificationDialog = (id) => {
     if(!textModificationDialogTextArea) {
-        textModificationDialogParent = document.querySelector('#he-dialog-container') || document.createElement('div');
-        textModificationDialogParent.id = 'he-dialog-container';
+        textModificationDialogParent = document.querySelector('#te-dialog-container') || document.createElement('div');
+        textModificationDialogParent.id = 'te-dialog-container';
         textModificationDialogParent.style = `
             z-index: 3;
             position: absolute;
@@ -602,8 +588,8 @@ const openModificationDialog = (id) => {
         };
         document.body.append(textModificationDialogParent);
 
-        const textModificationDialog = document.querySelector('#he-dialog') || document.createElement('dialog');
-        textModificationDialog.id = 'he-dialog';
+        const textModificationDialog = document.querySelector('#te-dialog') || document.createElement('dialog');
+        textModificationDialog.id = 'te-dialog';
         textModificationDialog.style = `
             display: flex;
             padding:0;
@@ -619,6 +605,23 @@ const openModificationDialog = (id) => {
             min-height: 100px;
         `;
         textModificationDialog.append(textModificationDialogTextArea);
+
+        const underDialogText = document.createElement('div');
+        underDialogText.innerText = "Press Shift + Enter to submit"
+        underDialogText.style = `
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-family: verdana;
+            font-size: 11px;
+            color: #000;
+            -webkit-text-fill-color: white;
+            background: #979797e3;
+            padding: 3px 0 6px 0;
+        `;
+        textModificationDialog.append(underDialogText);
     }
 
     textModificationDialogParent.style.display = 'flex';
@@ -640,6 +643,14 @@ const openModificationDialog = (id) => {
             }
         });
         reDraw(true);
+    }
+
+    textModificationDialogTextArea.onkeypress = (e) => {
+        if(e.charCode === 13 && !!e.shiftKey)
+        {
+            textModificationDialogParent.style.display = 'none';
+            textModificationOpen = false;
+        }
     }
 
     textModificationDialogTextArea.select();
@@ -715,10 +726,14 @@ const onMouseMove = (e) => {
     const existingHoveringOn = currentlyHoveringOn.slice();
     currentlyHoveringOn = [];
     let redrawRequired = false;
+    let redrawClearCache = false;
     let cursor = null;
 
     const mouseX = e.clientX;
     const mouseY = e.clientY;
+
+    lastMouseX = mouseX;
+    lastMouseY = mouseY;
 
     // Hover effects
     for(const itKey of itemOrderCache) {
@@ -729,13 +744,7 @@ const onMouseMove = (e) => {
             continue;
         }
         for(let buttonDim of wPos.buttonDimensions.buttons) {
-            const radiusCheck = {
-                ...wPos.buttonDimensions,
-                ...buttonDim,
-                mouseX,
-                mouseY
-            };
-            if(isInRadiusOf(radiusCheck)) {
+            if(isInRadiusOf({ ...buttonDim, mouseX, mouseY })) {
                 cursor = "pointer";
                 break; // breaks inner loop only
             }
@@ -752,6 +761,7 @@ const onMouseMove = (e) => {
             break;
         }
     }
+
     for(const itKey of itemOrderCache) {
         const wPos = withSizeAndPosition({
             id: itKey
@@ -759,11 +769,16 @@ const onMouseMove = (e) => {
         if(wPos.restrictInteractivity) {
             continue;
         }
-        if(isInRadiusOf({
+        if(
+            isInRadiusOf({
                 ...wPos,
                 mouseX,
                 mouseY
-            })) {
+            })
+            || wPos.buttonDimensions.buttons.some(buttonDim => 
+                isInRadiusOf({ ...buttonDim, mouseX, mouseY })
+            )
+        ) {
             currentlyHoveringOn.push(itKey);
         }
     }
@@ -782,7 +797,8 @@ const onMouseMove = (e) => {
             panX += movementX;
             panY += movementY;
 
-            reDraw(true);
+            redrawRequired = true;
+            redrawClearCache = true;
         } else if(draggingTarget !== null) {
             const it = items.find(it => it.id === draggingTarget);
             if(it) {
@@ -815,7 +831,25 @@ const onMouseMove = (e) => {
     }
 
     if(cursor === null) {
+
         cursor = "default";
+
+        if(textHoverHasChanged())
+        {
+            redrawRequired = true;
+        }
+        if(hoverTextTargetKey !== null)
+        {
+            cursor = "text";
+        }
+    }
+    else
+    {
+        if(hoverTextTargetKey !== null)
+        {
+            hoverTextTargetKey = null; // No text hover
+            redrawRequired = true;
+        }
     }
 
     // Apply draw changes
@@ -829,7 +863,7 @@ const onMouseMove = (e) => {
         redrawRequired = true;
     }
     if(redrawRequired) {
-        reDraw();
+        reDraw(redrawClearCache);
     }
 };
 
@@ -867,6 +901,14 @@ const onMouseClick = (e) => {
     if(!lastDragInformation.wasDrag) {
         const mouseX = e.clientX;
         const mouseY = e.clientY;
+
+        if(hoverTextTargetKey)
+        {
+            openModificationDialog(hoverTextTargetKey);
+            hoverTextTargetKey = null;
+            return;
+        }
+
         for(let it of items) {
             const wPos = withSizeAndPosition(it);
             if(!wPos.restrictInteractivity) {
@@ -927,7 +969,7 @@ const addToHistoryAndApply = (h) => {
     const hCopy = JSON.parse(JSON.stringify(h));
     applyActionToItem(h);
     history.push(hCopy);
-    localStorage.setItem(localStorage.getItem(localStorageLastSelectedKey), saveFormat({
+    localStorage.setItem(localStorage.getItem(localStorageSelectedTreeKey), saveFormat({
         history
     }));
     if(h.action === 'modify') {
@@ -980,7 +1022,7 @@ const saveFormat = ({
     });
 
 const loadLocalStorage = () => {
-    let selectedTab = localStorage.getItem(localStorageLastSelectedKey);
+    let selectedTab = localStorage.getItem(localStorageSelectedTreeKey);
     const keys = Object.keys(localStorage).filter(k => k.startsWith(localStorageKeyPrefix));
     if(keys.length === 0) {
         keys[0] = addNewTree();
@@ -988,7 +1030,7 @@ const loadLocalStorage = () => {
 
     if(selectedTab === null || !keys.includes(selectedTab)) {
         selectedTab = keys[0];
-        localStorage.setItem(localStorageLastSelectedKey, selectedTab);
+        localStorage.setItem(localStorageSelectedTreeKey, selectedTab);
     }
 
     const conf = JSON.parse(localStorage.getItem(selectedTab));
@@ -997,8 +1039,10 @@ const loadLocalStorage = () => {
     rebuildItemsFromHistory();
 }
 
+const newTreeKey = () => localStorageKeyPrefix + flatDate();
+
 const addNewTree = () => {
-    const newKey = localStorageKeyPrefix + flatDate();
+    const newKey = newTreeKey();
     localStorage.setItem(
         newKey, saveFormat({
             history: [{
@@ -1023,6 +1067,7 @@ const renderTabMenu = () => {
         float:left;
         font-family: ${fontFamily};
         font-size:12px;
+        height:14px;
         padding: 3px 8px;
         background: #ddd;
         border: 1px solid #ccc;
@@ -1050,12 +1095,14 @@ const renderTabMenu = () => {
         })
         .sort((s1, s2) => s1.storageKey < s2.storageKey ? -1 : s1.storageKey > s2.storageKey ? 1 : 0)
     );
+    
+    const currentTabText = () => tabs.find(t => t.storageKey === localStorage.getItem(localStorageSelectedTreeKey))?.text;
 
     for(const tab of tabs) {
         const tabElement = document.createElement('div');
         tabElement.dataset.storageKey = tab.storageKey;
         tabElement.dataset.storageArrayIndex = tab.index;
-        tabElement.dataset.isSelected = localStorage.getItem(localStorageLastSelectedKey) === tab.storageKey;
+        tabElement.dataset.isSelected = localStorage.getItem(localStorageSelectedTreeKey) === tab.storageKey;
         tabElement.innerText = tab.text;
         if(tabElement.dataset.isSelected === "true") {
             tabElement.style = tabStyle + `
@@ -1065,7 +1112,7 @@ const renderTabMenu = () => {
         } else {
             tabElement.style = tabStyle;
             tabElement.onclick = () => {
-                localStorage.setItem(localStorageLastSelectedKey, tab.storageKey);
+                localStorage.setItem(localStorageSelectedTreeKey, tab.storageKey);
                 resetCameraLocation();
                 loadLocalStorage();
                 renderTabMenu();
@@ -1078,7 +1125,7 @@ const renderTabMenu = () => {
 
     const addElement = document.createElement('div');
     addElement.innerText = '+';
-    addElement.style = tabStyle;
+    addElement.style = tabStyle + 'line-height:0.9;';;
     addElement.onclick = () => {
         addNewTree();
         resetCameraLocation();
@@ -1089,14 +1136,67 @@ const renderTabMenu = () => {
     };
     tabBar.append(addElement);
 
+    const importElement = document.createElement('div');
+    importElement.innerHTML = '&uarr;';
+    importElement.style = tabStyle + 'line-height:0.9;';
+    importElement.title = 'Import Tree (Upload Json)';
+    importElement.onclick = () => {
+        const uploadInput = document.createElement('input');
+        uploadInput.type = 'file';
+        uploadInput.onchange = e => {
+            const fileName = e.target.files[0].name;
+            if(!fileName.endsWith('.json'))
+            {
+                alert(`Expected json for import but got '${fileName}'`);
+            }
+            else
+            {
+                const reader = new FileReader();
+                reader.readAsText(e.target.files[0],'UTF-8');
+                reader.onload = readerEvent => {
+                    const content = readerEvent.target.result;
+                    try
+                    {
+                        const json = JSON.stringify(JSON.parse(content)); // test valid json & remove tabbing/spacing
+                        let newKey = fileName.split("__").shift();
+                        if(!newKey.startsWith(localStorageKeyPrefix))
+                        {
+                            newKey = newTreeKey();
+                        }
+                        if(localStorage.getItem(newKey))
+                        {
+                            if(!confirm(`Are you sure you want to overwrite tree using file '${fileName}'?`))
+                            {
+                                return;
+                            }
+                        }
+                        localStorage.setItem(newKey, json);
+                        localStorage.setItem(localStorageSelectedTreeKey, newKey);
+                        resetCameraLocation();
+                        loadLocalStorage();
+                        renderTabMenu();
+                        reDraw(true);
+                        resetItemOrderCache();
+                    }
+                    catch(er)
+                    {
+                        alert(`Failed to import, possibly malformatted json: ${er}`);
+                    }
+                }
+            }
+        }
+        uploadInput.click();
+    };
+    tabBar.append(importElement);
+
     const removeElement = document.createElement('div');
     removeElement.innerText = 'X';
     removeElement.style = tabStyle + 'float:right;';
+    removeElement.title = 'Delete Tree';
     removeElement.onclick = () => {
-        const tab = tabs.find(t => t.storageKey === localStorage.getItem(localStorageLastSelectedKey));
-        const confirmed = confirm(`Are you sure you want to delete ${tab.text}?`);
+        const confirmed = confirm(`Are you sure you want to delete ${currentTabText()}?`);
         if(confirmed) {
-            deleteTree(localStorage.getItem(localStorageLastSelectedKey));
+            deleteTree(localStorage.getItem(localStorageSelectedTreeKey));
             resetCameraLocation();
             loadLocalStorage();
             renderTabMenu();
@@ -1105,12 +1205,34 @@ const renderTabMenu = () => {
         }
     };
     tabBar.append(removeElement);
+
+    const exportElement = document.createElement('div');
+    exportElement.innerHTML = '&darr;';
+    exportElement.style = tabStyle + 'float:right;line-height:0.7;';
+    exportElement.title = 'Export Tree (Download Json)';
+    exportElement.onclick = () => {
+        const a = document.createElement('a');
+        const selectedKey = localStorage.getItem(localStorageSelectedTreeKey);
+        const selectedTreeJson = localStorage.getItem(selectedKey);
+        const exportStr = JSON.stringify(JSON.parse(selectedTreeJson, null, 4));
+        const fileName = (
+            `${selectedKey}`+
+            `__${currentTabText().trim().replace(/ /gm, '_')}`
+            +`__${new Date().toISOString().replace(/[-T:.]/gim, '_').slice(0, -1)}`
+        );
+        a.setAttribute('href', URL.createObjectURL(new Blob([exportStr], {type: 'application/json'})));
+        a.setAttribute('download', fileName);
+        a.click();
+
+    };
+    tabBar.append(exportElement);
+
 };
 
 const initializeHtml = () => 
 {
-    tabBar = document.querySelector('#he-tabbar') || document.createElement('div');
-    tabBar.id = 'he-tabbar';
+    tabBar = document.querySelector('#te-tabbar') || document.createElement('div');
+    tabBar.id = 'te-tabbar';
     tabBar.style = `
         position:absolute;
         top:0;
