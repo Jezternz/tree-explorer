@@ -11,10 +11,10 @@ Features:
 * Ability to zoom/pan
 * Ability to add/remove branches/leafs at any depth
 * Ability to resize leafs between 3 sizes to indicate size or importance.
-* Leafs can either contain child leafs (and have a text title) or contain text.
+* Leafs can either contain child leafs (and have a text title) or contain text. 
+* Ability to import/export json
 
 Future features:
 * Various panning/zooming improvements
-* Ability to import/export json
 * Redo/Undo history buttons
 * Ability to select another source beyond localstorage (e.g. an endpoint to put/get json from)
